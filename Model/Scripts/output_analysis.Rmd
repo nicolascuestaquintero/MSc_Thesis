@@ -1,0 +1,147 @@
+---
+title: "Output_analysis"
+author: "Nicolás Cuesta Quintero"
+date: "6/7/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(magrittr)
+```
+
+# Preliminar data
+
+```{r preliminar, message=FALSE, warning=FALSE}
+ncf_source <- "../Source/SourceFiles/NCREIF/NPI Returns 3-9-21.xlsx"
+
+ncf_df <- map_dfr(c("NPI - National", "NPI - Property Type"),
+                  function(x) {
+                    read_xlsx(path = ncf_source, sheet = x)
+                  }) %>% 
+  transmute(
+    Date = yq(str_c(Year, "0", Quarter)) %m+% months(3) %m+% days(-1),
+    PropertyType = factor(replace_na(PropertyType, "All"), levels = c("All", "A", "H", "I", "O", "R")),
+    y = `Income Return`,
+    g = `Capital Return`,
+    r = `Total Return`
+  ) %>% 
+  select(Date, PropertyType, g) %>% 
+  pivot_wider(names_from = PropertyType, values_from = g) %>% 
+  drop_na() %>% 
+  left_join(
+    read_excel(ncf_source, sheet = "NPI - National") %>% 
+      transmute(Date = yq(str_c(Year, "0", Quarter)) %m+% months(3) %m+% days(-1), Index),
+    by = c("Date")
+  )
+
+# Risk free rates 
+
+ncf_rf <- read_csv("../Source/SourceFiles/NCREIF/TB3MS.csv") %>%
+  transmute(Date = DATE %m+% days(-1), rf = TB3MS / 100) %>% 
+  mutate(Month = month(Date)) %>% 
+  filter(Month %in% c(3, 6, 9, 12)) %>% 
+  filter(Date >= min(ncf_df$Date)) %>% 
+  select(Date, rf)
+
+# Function that use a grid of weights and determine the portfolios returns
+main_portfolios <- function(wA, wI, wO, wR, wH) {
+  
+  # Calculation portfolio-wise
+  n <- length(wA)
+  v <- vector("list", n)
+  for (k in 1:n) {
+    v[[k]] <- ncf_df %>%
+      mutate(rp = A * wA[k] + I * wI[k] + O * wO[k] + R * wR[k] + H * wH[k]) %>% 
+      select(Date, rp)
+  }
+  
+  # Results
+  return(v)
+}
+
+# Grid of all possible portfolios (No short selling, only real estate)
+main_cport <- expand.grid(
+  wA = seq(0, 1, 0.10),
+  wI = seq(0, 1, 0.10),
+  wO = seq(0, 1, 0.10),
+  wR = seq(0, 1, 0.10),
+  wH = seq(0, 1, 0.10)
+) %>% 
+  mutate(Filter = wA + wI + wO + wR + wH) %>%
+  filter(Filter == 1) %>% 
+  mutate(port_key = row_number()) %>% 
+  select(port_key, wA:wH) %>% 
+  as_tibble() %>% 
+  mutate(Portfolio = main_portfolios(wA, wI, wO, wR, wH))
+```
+
+# Simulation results analyses
+
+## 3-Years Protective put 
+
+```{r pp1, message=FALSE, warning=FALSE}
+# Read data
+output_3put <- read_csv("../Output/Model Output/pvalues_put.csv")
+```
+
+
+```{r}
+n <- nrow(main_cport)
+fa <- output_3put %>% 
+  mutate(Fail = basis_pval > 0.05) %>% 
+  group_by(Expiration) %>% 
+  summarise(Failed = sum(Fail)) %>% 
+  right_join(
+    ncf_df %>% 
+      select(Date, NPI = All) %>% 
+      filter(Date >= as.Date("2000-12-31")),
+    by = c("Expiration" = "Date")
+  ) %>% 
+  mutate(Failed = replace_na(Failed, 0)) %>% 
+  arrange(Expiration)
+
+fa_scale <- 1 / 8700
+ggplot(mapping = aes(x = Expiration)) +
+  geom_hline(
+    yintercept = 0,
+    colour = "grey"
+  ) +
+  geom_col(
+    data = fa %>% 
+      select(Expiration, Failed),
+    mapping = aes(y = Failed),
+    fill = "grey"
+  ) +
+  geom_line(
+    data = fa %>% 
+      select(Expiration, NPI) %>% 
+      mutate(NPI = NPI / fa_scale),
+    mapping = aes(y = NPI),
+    colour = "black",
+    linetype = "dashed"
+  ) +
+  geom_point(
+    data = fa %>% 
+      select(Expiration, NPI) %>% 
+      mutate(NPI = NPI / fa_scale),
+    mapping = aes(y = NPI),
+    colour = "black"
+  ) + 
+  scale_y_continuous(
+    sec.axis = sec_axis(
+      ~. * fa_scale,
+      labels = scales::percent,
+      name = "NPI Quarterly Returns"
+    )
+  ) + labs(
+    y = "Number of Failed Hedges",
+    x = "Expiration Date",
+    colour = "Parameter"
+  ) +
+  theme_bw()
+```
+

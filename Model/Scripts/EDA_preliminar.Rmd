@@ -1,0 +1,546 @@
+---
+title: "NCREIF Returns Exploration"
+author: "Nicolás Cuesta Quintero"
+date: "3/13/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. NCREIF Highlights
+
+Quarterly returns calculated as
+
+$$r_{t} = y_{t}+g_{t}.$$
+
+where $y$ is the income return and $g$ is the growth or appreciation return, given by
+
+$$y_{t}=\frac{NOI_{t}}{BMV_{t}-\frac{1}{2}\left(PS_{t}-CI_{t}\right)-\frac{1}{3}NOI_{t}},$$
+$$g_{t}=\frac{EMV_{t}-BMV_{t}+\left(PS_{t}-CI_{t}\right)}{BMV_{t}-\frac{1}{2}\left(PS_{t}-CI_{t}\right)-\frac{1}{3}NOI_{t}}.$$
+
+# 1. Data import
+
+Upload required packages.
+
+```{r Import packages, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(readxl)
+library(lubridate)
+library(magrittr)
+```
+
+Read required data. Start the analysis with only property types
+
+```{r Import NCREIF returns}
+ncf_source <- "../Source/SourceFiles/NCREIF/NPI Returns 3-9-21.xlsx"
+
+map_dfr(c("NPI - National", "NPI - Property Type"),
+        function(x) {
+          read_xlsx(path = ncf_source, sheet = x)
+         }) %>% 
+  transmute(
+    Date = yq(str_c(Year, "0", Quarter)) %m+% months(3) %m+% days(-1),
+    PropertyType = factor(replace_na(PropertyType, "All"), levels = c("All", "A", "H", "I", "O", "R")),
+    y = `Income Return`,
+    g = `Capital Return`,
+    r = `Total Return`
+  ) -> ncf_dataset
+
+glimpse(ncf_dataset)
+```
+
+# 2. Exploratory data analysis
+
+## 2.1. Descriptive statistics
+
+
+Positive serial-correlation
+
+```{r}
+returns <- ts(
+    filter(ncf_dataset, PropertyType == "All", Date <= as.Date("2020-03-31"))$r, 
+    start = 1978, 
+    frequency = 4
+  )
+
+forecast::ggtsdisplay(
+  returns, 
+  lag.max = 30, 
+  plot.type = "scatter", 
+  theme = theme_bw(),
+  ylab = "NPI Total Returns", 
+  xlab = "Year"
+)
+```
+
+- Hospitality starts 18 quarters late.
+- No explicit data gaps.
+- Income returns seem to be uniform.
+- Except for Hospitality, sample does not show negative NOI.
+- Capital returns means are lower but standard deviations are higher.
+
+```{r Descriptive statistics}
+ncf_dataset %>% 
+  group_by(PropertyType) %>% 
+  skimr::skim()
+```
+
+- There is clearly no winner or loser. All property types seems to have similar mean.
+- Hispitality has clearly more outliers.
+- Income returns are less volatile than capital returns.
+
+```{r Returns boxplot per index}
+ncf_datasetp <- ncf_dataset %>% 
+  pivot_longer(cols = c("y", "g", "r"), names_to = "Index", values_to = "Return") %>% 
+  mutate(Index = factor(Index, levels = c("y", "g", "r"))) 
+
+ncf_datasetp %>% 
+  ggplot(mapping = aes(x = Index, y = Return)) +
+  geom_boxplot() +
+  facet_wrap(~PropertyType, nrow = 1) +
+  scale_y_continuous(labels = percent) +
+  theme_bw()
+```
+
+- Clearly income return is greater than 0 and shifts positively the capital return to get the total one.
+- Income appear to by leptokurtic.
+
+```{r Returns shape per index}
+ncf_datasetp %>% 
+  ggplot(mapping = aes(x = Return, fill = Index, color = Index)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~PropertyType, ncol = 2) +
+  scale_x_continuous(labels = percent) +
+  theme_bw()
+```
+
+```{r NPI decomposition, message=FALSE, warning=FALSE}
+ncf_dataset %>% 
+  filter(PropertyType == "All") %>% 
+  select(r, g, y) %>% 
+  GGally::ggpairs() +
+  scale_x_continuous(labels = percent) +
+  # scale_y_continuous(labels = percent) +
+  theme_bw()
+```
+
+## 2.2. Returns decomposition
+
+Now we want to know how well would Property Types be hedged by total index. Therefore, we bulild the same graphic using total capital return against property level capital returns.
+
+```{r Property types vs. NPI capital returns, message=FALSE, warning=FALSE}
+ncf_dataset %>% 
+  select(Date, PropertyType, g) %>% 
+  pivot_wider(names_from = PropertyType, values_from = g) %>% 
+  select(-c("Date")) %>% 
+  drop_na() %>%
+  `colnames<-`(c("Nation", "Apartments", "Industrial", "Office", "Retail", "Hospitality")) %>% 
+  GGally::ggpairs() +
+  scale_x_continuous(labels = percent) +
+  theme_bw() +
+  theme(
+    axis.text.x=element_text(angle = 90, vjust = 0.5, size = 0.75),
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+Let's repeat the exercise with income returns.
+
+```{r Property types vs. NPI income returns, message=FALSE, warning=FALSE}
+ncf_dataset %>% 
+  select(Date, PropertyType, y) %>% 
+  pivot_wider(names_from = PropertyType, values_from = y) %>% 
+  select(-c("Date")) %>% 
+  drop_na() %>% 
+  GGally::ggpairs() +
+  scale_x_continuous(labels = percent) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle = 45, vjust = 0.5))
+```
+
+## 2.3. Property types portfolios analysis
+
+This is spot vs. spot analysis.
+
+```{r Portfolios construction, cache = TRUE}
+# Grid of all possible portfolios (No short-sales only real estates)
+port_grid <- expand.grid(
+  wA = seq(0, 1, 0.05),
+  wI = seq(0, 1, 0.05),
+  wO = seq(0, 1, 0.05),
+  wR = seq(0, 1, 0.05),
+  wH = seq(0, 1, 0.05)
+) %>% 
+  mutate(Filter = wA + wI + wO + wR + wH) %>%
+  filter(Filter == 1) %>% 
+  select(wA:wH) %>% 
+  mutate(key = row_number()) %>% 
+  as_tibble()
+
+port_model <- function(wA, wI, wO, wR, wH) {
+
+  # Modified NCREIF dataset
+  df <- ncf_dataset %>% 
+    select(Date, PropertyType, g) %>% 
+    pivot_wider(names_from = PropertyType, values_from = g) %>% 
+    drop_na()
+  
+  # Calculation portfolio-wise
+  n <- length(wA)
+  v <- vector("list", n)
+  for (k in 1:n) {
+    v[[k]] <- df %>%
+      mutate(Portfolios = A * wA[k] + I * wI[k] + O * wO[k] + R * wR[k] + H * wH[k]) %>% 
+      select(Date, NPI = All, Portfolios) %>% 
+      mutate(Index = 100 * cumprod(1+ Portfolios),
+             Delta = c(Index[1] - 100, diff(Index)))
+  }
+  
+  # Results
+  return(v)
+}
+
+# Generate returns for each portfolio
+port_returns <- port_grid %>% 
+  select(key, wA:wH) %>% 
+  mutate(Portfolio = port_model(wA, wI, wO, wR, wH))
+
+glimpse(port_returns)
+```
+
+The most hospitality, the less the correlation.
+
+```{r Property types portfolios parallel lines, message=FALSE, warning=FALSE}
+# Parallel lines technique
+port_returns %>% 
+  mutate(rho = unlist(map(Portfolio, function(x) cor(x$NPI, x$Portfolios)))) %>% 
+  GGally::ggparcoord(columns = 2:6, groupColumn = 8, scale = "globalminmax", showPoints = TRUE) +
+  theme_bw()
+```
+
+## 2.4. Financials
+
+```{r Import NCREIF financials}
+map_dfr(c("NPI - National", "NPI - Property Type"),
+        function(x) {
+          read_xlsx(path = ncf_source, sheet = x)
+         }) %>% 
+  transmute(
+    Date = yq(str_c(Year, "0", Quarter)) %m+% months(3) %m+% days(-1),
+    PropertyType = factor(replace_na(PropertyType, "All"), levels = c("All", "A", "H", "I", "O", "R")),
+    NOI,
+    MV,
+    BMV = MVLag1
+  ) -> ncf_financials
+
+glimpse(ncf_financials)
+```
+
+Apartments, Office and Industrial has a huge correlation with the national index. We want to analyze, histrically, what was their weight on the NPI.
+
+- Office has a huge weight on the index, so correlation mught be spurious
+- Apartments and industrial has relatively low participation and their correlation is relaly huge.
+- Retail is an odd case.
+- Hospitality might not be well represented by the index.
+
+```{r}
+ncf_fplot <- ncf_financials %>% 
+  transmute(
+    Date = Date, 
+    PropertyType = PropertyType,
+    Variable = MV # Proportionality function
+  ) %>% 
+  pivot_wider(names_from = PropertyType, values_from = Variable) %>% 
+  drop_na() %>% 
+  mutate(
+    A = A / All,
+    I = I / All,
+    O = O / All,
+    R = R / All,
+    H = H / All
+  ) %>% 
+  select(-c("All")) %>% 
+  pivot_longer(cols = c("A", "I", "O", "R", "H"), names_to = "PropertyType", values_to = "Proportion") %>% 
+  mutate(PropertyType = as.factor(PropertyType)) 
+  
+ncf_fplot %>%   
+  ggplot(mapping = aes(x = PropertyType, y = Proportion)) +
+  geom_boxplot() +
+  scale_y_continuous(labels = percent) +
+  theme_bw()
+  
+```
+
+```{r}
+ncf_fplot %>% 
+  group_by(PropertyType) %>% 
+  summarise(Proportion = mean(Proportion)) %>% 
+  ggplot(mapping = aes(x = PropertyType, y = Proportion, fill = PropertyType)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar()
+```
+
+
+# 3. Basis risk on the NPI
+
+## 3.1. Binomial model
+
+```{r Binomial model for pricing derivatives}
+# Determine spot price given total number of steps n, 
+# and number of upward movements u_n.
+spot_price <- function(s0, u, d, n, u_n = n) 
+  s0 * (1 + u) ^ (u_n) * (1 + d) ^ (n - u_n)
+
+# Risk-free asset value at moment n.
+rf_price <- function(a0, r, n) 
+  a0 * (1 + r) ^ n
+
+# Plain vanilla options payoff
+dvt_call <- function(s, k) max(s - k, 0)
+dvt_put <- function(s, k) max(k - s, 0)
+
+# Binomial model to price an option on the NPI
+dvt_binom <- function(h, s, u, d, r, N) {
+  
+  # Function that determine number of U's given the number of steps
+  f_us <- function(n) {
+    
+    # Switch flag
+    f_flag <- function() ifelse(flag == 1, flag <<- 0, flag <<- 1)
+    
+    # Populate sample space as a matrix 
+    n_row <- 2 ^ n; n_col <- n
+    us <- matrix(rep(0, n_row * n_col), nrow = n_row, ncol = n_col)
+    for (j in n_col:1) {
+      flag <- 1 # u
+      n_perGeom <- 2 ^ (n_col - j) # Geometric trick
+      k <- n_perGeom
+      for (i in 1:n_row) {
+        if (k == 0) {
+          f_flag()
+          k <- n_perGeom - 1
+        } else {
+          k <- k - 1
+        }
+        us[i, j] <- flag
+      }
+    }
+ 
+    # Return number of u's per tree branch
+    return(apply(us, 1, sum))
+  }
+  
+  # Risk-neutral probability
+  q <- (r - d) / (u - d)
+
+  # Backward prop
+  for (i in N:0) {
+    v <- vector("double", length = 2 ^ i)  
+    k <- 1
+    # Right hand side of the tree (implicit value)
+    if (i == N) {
+      v <- sapply(spot_price(s, u, d, N, u_n = f_us(N)),h)
+    # Otherwise
+    } else {
+      for (j in 1:(2 ^ i)) {
+        v[j] <- (q * v0[k] + (1 - q) * v0[k + 1]) / (1 + r)
+        k <- k + 2
+      }
+    }
+    # Next iteration
+    v0 <- v
+  }
+  
+  # Return derivative price
+  return(v0)
+}
+
+# CRR valuation
+dvt_crr <- function(h, s, u, d, r, N) {
+  q <- (r - d) / (u - d)
+  scenarios <- choose(N, 0:N) * q ^ (0:N) * (1 - q) ^ (N:0) * sapply(
+    s * (1 + u) ^ (0:N) * (1 + d) ^ (N:0), h)
+  sum(scenarios) * (1 + r) ^ (-N)
+}
+
+# BSM valuation
+dvt_bsm <- function(S, K, rf, Mat, sigma, Exc) {
+  
+  if (Mat > 0) { #BSM formula
+    d1 <- (log(S / K) + (rf + 0.5 * sigma ^ 2) * Mat) / (sigma * sqrt(Mat))
+    d2 <- d1 - sigma * sqrt(Mat)
+    if (Exc == "Call") {
+      price <- S * pnorm(d1) - K * exp(-rf * Mat) * pnorm(d2)
+    } else {  # Put
+      price <- K * exp(-rf * Mat) * pnorm(-d2) - S * pnorm(-d1)
+    }
+    
+    return(price)
+    
+  } else { # Intrinsic value
+    if (Exc == "Call") {
+      dvt_call(S, K)
+    } else {
+      dvt_put(S, K)
+    }
+  }
+  
+} 
+
+```
+
+## 3.2. Price and basis risk calculations.
+
+Risk free asset data (3 Months T-Bills)
+
+```{r Import risk-free asset data, message=FALSE, warning=FALSE}
+rf_data <- read_csv("../Source/SourceFiles/NCREIF/TB3MS.csv") %>% 
+  transmute(
+    Date = DATE %m+% days(-1),
+    rf = TB3MS / 100
+  )
+
+rf_data %>% 
+  ggplot(mapping = aes(x = Date, y = rf)) +
+  geom_line() +
+  scale_y_continuous(labels = percent) +
+  theme_bw()
+```
+
+Joining NPI (spot) data with risk free asset to price derivatives.
+
+**Derivatives condition**
+
+European call options:
+
+*Fixed inputs*
+
+- S: NPI Index
+- rf: 3 months T-Bills
+- $\sigma$: EWMA with $\lambda = 0.94$.
+
+*Parameters*
+
+- K: to be parametrized (itm, atm, otm)
+- T: 3 years (would be good to use 5 years too)
+
+Let bring the data.
+
+```{r Market data for option pricing}
+# Function that calculates EWMA volatility given a returns vector
+spot_ewma <- function(x, lambda = 0.94) {
+  n <- length(x)
+  v <- vector("double", n)
+  v[1] <- var(x)
+  for (i in 2:n) {
+    v[i] <- lambda * v[i - 1] + (1 - lambda) * (x[i - 1] ^ 2)
+  }
+  return(sqrt(v))
+}
+
+# Market data set for pricing options
+dvt_mktdata <- ncf_dataset %>% 
+  filter(PropertyType == "All") %>% 
+  select(Date, r) %>% 
+  mutate(NPI = cumprod(1 + r) * 100) %>%
+  mutate(vol = sqrt(4) * spot_ewma(r)) %>% 
+  left_join(rf_data, by = c("Date")) %>% 
+  mutate(rf = 4 * log(1 + rf / 4))
+```
+
+Now let's "write" 3-year derivatives each quarter from 1990-03-31 to 2017-12-31 and calculate the basis risk using at the money calls.
+
+```{r}
+
+# Derivatives years to maturity
+ytm <- 3
+
+# Calculate prices
+lapply(
+  dvt_mktdata %>% 
+    filter(
+      # Date >= as.Date("1985-03-31"),
+      Date >= as.Date("1998-12-31"),
+      Date <= as.Date("2017-03-31")
+    ) %$% Date, 
+  function(d) {
+    dfp <- dvt_mktdata %>% 
+      filter(
+        Date >= d,
+        Date <= d %m+% months(12 * ytm)
+      ) %>% 
+      mutate(
+        ttm = as.numeric(max(Date) - Date) / 365, 
+        strike = rep(NPI[1], 4 * ytm + 1),
+        exercise = "Put",
+        put = pmap_dbl(list(NPI, strike, rf, ttm, vol, exercise), dvt_bsm)
+      ) %>% 
+      select(Date, put) %>% 
+      transmute(Date, dc = c(NA, diff(put))) 
+    
+    br_model <- function(dataset) {
+      lm(Delta ~ dc, data = dataset)
+    }
+    
+    port_returns %>% 
+      mutate(Portfolio = map(Portfolio, function(x) {
+        x %>% 
+          left_join(dfp, by = c("Date")) %>% 
+          select(Date, dc, Delta) %>% 
+          drop_na()
+      })) %>% 
+      mutate(
+        linear_model = map(Portfolio, br_model),
+        summary = map(linear_model, function(l) {
+          x <- l$model[, 2, drop = TRUE]
+          y <- l$model[, 1, drop = TRUE]
+          e <- l$residuals
+          n <- length(x)
+          sxx <- sqrt(sum(x ^ 2) - (sum(x) ^ 2) / n)
+          s <- sqrt(sum(e ^ 2) / (n - 2))
+          return(
+            tibble(
+              beta = l$coefficients[2],
+              sigma = s,
+              t.statistic = beta / (s / sxx),
+              p.value = pt(-abs(t.statistic), n - 2, 0.025) + (1 - pt(abs(t.statistic), n - 2, 0.025))
+            )
+          )
+        })
+      ) %>% 
+      select(key, summary) %>% 
+      unnest(summary) %>% 
+      write_csv(str_c("basis_risk_put/", dfp[4 * ytm + 1, 1, drop = TRUE], ".csv"))
+    
+    return(d)
+  })
+
+```
+
+```{r}
+# To verify
+port_returns %>% 
+      mutate(Portfolio = map(Portfolio, function(x) {
+        x %>% 
+          left_join(dfp, by = c("Date")) %>% 
+          drop_na()
+      })) %>% 
+      mutate(
+        linear_model = map(Portfolio, br_model),
+        glance_model = map(linear_model, glance)
+      ) %>% 
+      select(key, glance_model) %>% 
+      unnest(glance_model) %>% View()
+```
+
+
+Not always basis risk is hedged. Coefficient is not significant always. Can we improve the hedging using basket options?
+
+
+

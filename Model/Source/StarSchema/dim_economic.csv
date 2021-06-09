@@ -1,0 +1,55 @@
+index_key,index_name,index_periodicity,index_units,index_factor,source_key,source_sheet,source_fread,index_category
+1,IPC (Sin alimentos),Monthly,Number,1,3,10,sread_ipc,Precios e inflacion
+2,IPC (Energeticos),Monthly,Number,1,3,11,sread_ipc,Precios e inflacion
+3,IPC (Total menos energeticos),Monthly,Number,1,3,12,sread_ipc,Precios e inflacion
+4,IPC (Servicios),Monthly,Number,1,3,13,sread_ipc,Precios e inflacion
+5,IPC (Bienes durables),Monthly,Number,1,3,14,sread_ipc,Precios e inflacion
+6,IPC (Bienes semi durables),Monthly,Number,1,3,15,sread_ipc,Precios e inflacion
+7,IPC (Bienes no durables),Monthly,Number,1,3,16,sread_ipc,Precios e inflacion
+8,IVP,Yearly,Percent,0.01,4,IVP_Var,sread_ivp,Construccion
+9,ICCV,Monthly,Percent,0.01,5,Anexo 5,sread_iccv,Construccion
+10,CHV (Saldo de capital total creditos de vivienda),Quarterly,Currency,1000000,6,A3,sread_chv,Construccion
+11,CHV (Tipo - VIS),Quarterly,Currency,1000000,6,A4,sread_chv,Construccion
+12,CHV (Tipo - NO VIS),Quarterly,Currency,1000000,6,A4,sread_chv,Construccion
+13,CHV (Vencimiento - Vigente),Quarterly,Currency,1000000,6,A5,sread_chv,Construccion
+14,CHV (Vencimiento - Vencida),Quarterly,Currency,1000000,6,A5,sread_chv,Construccion
+15,CHV (Moneda - UVR),Quarterly,Currency,1000000,6,A6,sread_chv,Construccion
+16,CHV (Moneda - PESOS),Quarterly,Currency,1000000,6,A6,sread_chv,Construccion
+17,CHV (Numero de creditos),Quarterly,Number,1,6,A7,sread_chv,Construccion
+18,CHV (Acreedor - Cooperativas y fondos),Quarterly,Currency,1000000,6,A16,sread_chv,Construccion
+19,CHV (Acreedor - Establecimientos de Credito),Quarterly,Currency,1000000,6,A16,sread_chv,Construccion
+20,CHV (Acreedor - CCF),Quarterly,Currency,1000000,6,A16,sread_chv,Construccion
+21,CHV (Acreedor - Otros),Quarterly,Currency,1000000,6,A16,sread_chv,Construccion
+22,CHV (Deudor - Propia en balance),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+23,CHV (Deudor - Propia fuera de balance),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+24,CHV (Deudor - Propia Cisa),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+25,CHV (Deudor - Titularizada),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+26,CHV (Deudor - Adm Fogafin),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+27,CHV (Deudor - Adm Patrimonio autonomo),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+28,CHV (Deudor - Adm Otros),Quarterly,Currency,1000000,6,A17,sread_chv,Construccion
+29,IPVN (Agregado),Monthly,Number,1,8,Sheet1,sread_ipvn,Precios e inflacion
+30,IPVN (Bogota),Monthly,Number,1,8,Sheet1,sread_ipvn,Precios e inflacion
+31,IPVN (Cali),Monthly,Number,1,8,Sheet1,sread_ipvn,Precios e inflacion
+32,IPVN (Medellin),Monthly,Number,1,8,Sheet1,sread_ipvn,Precios e inflacion
+33,IPVU (Anual nominal - Agregado),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+34,IPVU (Anual nominal - Bogota),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+35,IPVU (Anual nominal - Medellin),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+36,IPVU (Anual nominal - Cali),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+37,IPVU (Anual nominal - VIS),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+38,IPVU (Anual nominal - NO VIS),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+39,IPVU (Anual real - Agregado),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+40,IPVU (Anual real - Bogota),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+41,IPVU (Anual real - Medellin),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+42,IPVU (Anual real - Cali),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+43,IPVU (Anual real - VIS),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+44,IPVU (Anual real - NO VIS),Yearly,Number,1,9,Sheet1,sread_ipvuy,Precios e inflacion
+45,IPVU (Trimestral nominal - Agregado),Quarterly,Number,1,10,Sheet1,sread_ipvuq,Precios e inflacion
+46,IPVU (Trimestral real - Agregado),Quarterly,Number,1,10,Sheet1,sread_ipvuq,Precios e inflacion
+47,COLCAP,Daily,Number,1,11,Sheet1,sread_colcap,Mercado accionario
+48,TES PESOS 0C 1Y,Monthly,Percent,0.01,12,Sheet1,sread_tes,Tasas de interes
+49,TES PESOS 0C 5Y,Monthly,Percent,0.01,12,Sheet1,sread_tes,Tasas de interes
+50,TES PESOS 0C 10Y,Monthly,Percent,0.01,12,Sheet1,sread_tes,Tasas de interes
+51,TES UVR 0C 1Y,Monthly,Percent,0.01,13,Sheet1,sread_tes,Tasas de interes
+52,TES UVR 0C 5Y,Monthly,Percent,0.01,13,Sheet1,sread_tes,Tasas de interes
+53,TES UVR 0C 10Y,Monthly,Percent,0.01,13,Sheet1,sread_tes,Tasas de interes
+54,Desempleo,Monthly,Percent,0.01,14,Sheet1,sread_desempleo,Mercado laboral

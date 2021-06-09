@@ -1,0 +1,897 @@
+---
+title: "Hedging real estate portfolios"
+author: "Nicolas Cuesta Quintero"
+date: 'March, 2021'
+output:
+  xaringan::moon_reader:
+    css: xaringan-themer.css
+    nature:
+      slideNumberFormat: "%current%"
+      highlightStyle: github
+      highlightLines: true
+      ratio: 16:9
+      countIncrementalSlides: true
+---
+
+```{r setup, include=FALSE}
+options(htmltools.dir.version = FALSE)
+knitr::opts_chunk$set(
+  fig.width=9, fig.height=3.5, fig.retina=3,
+  out.width = "100%",
+  cache = FALSE,
+  echo = TRUE,
+  message = FALSE, 
+  warning = FALSE,
+  fig.show = TRUE,
+  hiline = TRUE
+)
+```
+
+```{r xaringan-themer, include=FALSE, warning=FALSE}
+library(xaringanthemer)
+style_duo_accent(primary_color = "#23395b", secondary_color = "#047796")
+```
+
+```{r Import packages, include=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(readxl)
+library(lubridate)
+library(magrittr)
+```
+
+```{r Import NCREIF returns, include=FALSE, message=FALSE, warning=FALSE}
+ncf_source <- "../../../Source/SourceFiles/NCREIF/"
+
+# Read NCREIF data
+map_dfr(c("NPI - National", "NPI - Property Type"),
+        function(x) {
+          read_xlsx(path = str_c(ncf_source, "NPI Returns 3-9-21.xlsx"), sheet = x)
+         }) %>%
+  transmute(
+    Date = yq(str_c(Year, "0", Quarter)) %m+% months(3) %m+% days(-1),
+    PropertyType = factor(replace_na(PropertyType, "All"), levels = c("All", "A", "H", "I", "O", "R")),
+    y = `Income Return`,
+    g = `Capital Return`,
+    r = `Total Return`
+  ) -> ncf_dataset
+
+# Read 3 Month T-Bills data
+rf_dataset <- read_csv(str_c(ncf_source, "TB3MS.csv")) %>% 
+  transmute(
+    Date = DATE %m+% days(-1),
+    rf = TB3MS / 100
+  )
+
+# Read S&P 500 data
+spx_dataset <- read_xlsx(str_c(ncf_source, "spx.xlsx")) %>% 
+  mutate(Date = as.Date(Date)) %>% 
+  arrange(Date) %>% 
+  select(Date, Close = `Close*`)
+```
+
+# Agenda
+
+.pull-left[
+**1. Real Estate Indices**
+
+ - What is an index?
+ - Transaction based vs. Value based indices
+ - NCREIF National Price Index
+  
+**2. Real Estate Derivatives**
+
+ - Options, futures and other derivatives
+ - Pricing methodologies
+ - Basis risk
+]
+
+.pull-right[
+**3. Hedging Real Estate Portfolios**
+
+ - Can the NPI hedge active strategies?
+ - Empirical evidence of basis risk
+ - What's next?
+  
+**Bibliography**
+]
+
+---
+class: inverse center middle
+
+# 1. Real Estate Indices
+
+---
+## What is an index?
+
+Following [Investopedia](https://www.investopedia.com/terms/i/index.asp) definition, *"An index is a method to track the performance of a group of assets in a standardized way. Indexes typically measure the performance of a basket of securities intended to replicate a certain area of the market"*.
+
+Usually, the performance of multiple assets are measured periodically, and the index would be constructed averaging these assets returns, either equally weighted or weighted by their market value (capitalization). 
+
+Some of the most used indices are: the Investment Property Data Index (IPD), NCREIF National Price Index (NPI), Moody's/RCA Commercial Property Price Index (CPPI), and the S&P Case-Shiller Index.
+
+---
+## Transaction-Based vs. Appraisal-Based indices
+
+In real estate, there are two types of indices: transaction-based and appraisal-based.
+
+.pull-left[
+Transaction-based indices were initially proposed by (Shiller & Case, 1989) using the repeated sales methodology. He based the index returns on transactions of properties that happened at least two time in a given period.
+]
+.pull-right[
+Appraisal-based indices based their capital weight on appraisal made by porperty owners or external appraiser. These indices are usually more smooth than transactional ones since appraiser expectation are implicit in its capital component.
+]
+
+In Colombia, the only real estate index, which is published by its central bank (Banco de la Republica), is transaction-based and it is calculated nation-wide, and for the three biggest cities: Bogota, DC, Medellin and Cali.
+
+---
+## NCREIF National Price Index
+
+The [National Council of Real Estate Investment Fiduciaries (NCREIF)](https://www.ncreif.org/) is a non-profit organization that centralizes both property and fund level real estate data, across the United States.
+</br></br>
+NCREIF National Price Index (NPI) is the most widely used property index in the United States, gathering quaterly data since 1987 for more than 9,000 properties, as of the fourth quarter of 2020.
+</br></br>
+In particular, it uses property level data to calculate real estate returns and provide value-based indices by MSA, Division, State, Region, Property type or nation-wide portfolios. 
+</br></br>
+However, given the value-based nature of the index, it smooths changes comapred to transactional indices. 
+
+---
+
+```{r NPI and recessions, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+recessions <- tribble(
+  ~Peak, ~Trough,
+  "1980-01-01", "1980-07-01",
+  "1981-07-01", "1982-11-01",
+  "1990-08-01", "1993-02-01",
+  "2001-03-01", "2001-12-01",
+  "2007-12-01", "2009-06-01",
+  "2020-03-01", "2021-04-01"
+) %>% 
+  mutate(
+    Peak = as.Date(Peak),
+    Trough = as.Date(Trough)
+  )
+
+ncf_dataset %>% 
+  filter(PropertyType == "All") %>%  
+  mutate(NPI = 100 * cumprod(1 + r)) %>% 
+  transmute(Date, HPR = 100 * r, NPI) %>%
+  pivot_longer(cols = c("HPR", "NPI"), names_to = "Variable", values_to = "Value") %>% 
+  mutate(Variable = factor(Variable, levels = c("NPI", "HPR"))) %>% 
+  ggplot() +
+  geom_line(
+    mapping = aes(x = Date, y = Value),
+    color = "#23395b",
+    size = 0.75
+  ) +
+  geom_rect(
+    mapping = aes(xmin = Peak, xmax = Trough, ymin = -Inf, ymax = +Inf), 
+    data = recessions, 
+    fill = "#FF0000", 
+    alpha = 0.10
+  ) +
+  facet_wrap(
+    ~Variable, 
+    nrow = 2,
+    scales = "free_y",
+    strip.position = "left",
+    labeller = as_labeller(c(NPI = "Index value", HPR = "Quarterly Returns (%)") )
+  ) +
+  labs(
+    x = "Year",
+    y = NULL,
+    title = "National Price Index (NPI)",
+    subtitle = "From 1978-Q1 to 2020-Q4",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+
+```
+
+---
+
+```{r Asset type return, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_dataset %>% 
+  select(Date, PropertyType, r) %>% 
+  pivot_wider(names_from = PropertyType, values_from = r) %>% 
+  select(
+    Date,
+    NPI = All,
+    Apartments = A,
+    Industrial = I,
+    Office = O,
+    Retail = R,
+    Hospitality = H
+  ) %>% 
+  left_join(rf_dataset %>% 
+              transmute(Date, `3M-TB` = rf / 4), 
+            by = c("Date")) %>% 
+  left_join(spx_dataset %>% 
+              transmute(
+                Date = Date - 1,
+                SP500 = c(NA, Close[-1] / Close[-nrow(spx_dataset)] - 1)), 
+            by = c("Date")) %>% 
+  drop_na() %>% 
+  mutate(Period = factor(str_c(floor(year(Date) / 10) * 10, "'s"), levels = c("1990's", "2000's", "2010's"))) %>% 
+  filter(Period %in% c("1990's", "2000's", "2010's")) %>% 
+  pivot_longer(NPI:SP500, names_to = "Asset Type", values_to = "Return") %>% 
+  group_by(Period, `Asset Type`) %>% 
+  summarize(
+    `Expected Return` = 4 * mean(Return), 
+    Risk = 2 * sd(Return),
+  ) %>% 
+  mutate(VC = `Expected Return` / Risk) %>% 
+  ungroup() %>% 
+  mutate(Category = map_chr(`Asset Type`, function(x) {
+    if (x == "3M-TB") {
+      return("Government")
+    } else {
+      if (x == "SP500") {
+        return("Equity")
+      } else {
+        return("Real Estate")
+      }
+    }
+  })) %>% 
+  mutate(
+    `Asset Type` = factor(
+      `Asset Type`, 
+      levels = c("NPI", "Apartments", "Hospitality", "Industrial", "Office", "Retail", "SP500", "3M-TB")
+    )
+  ) %>% 
+  ggplot(mapping = aes(x = Risk, y = `Expected Return`, color = `Asset Type`, shape = Category,)) +
+  geom_point(size = 2) +
+  ggrepel::geom_label_repel(mapping = aes(label = `Asset Type`), size = 3) +
+  facet_wrap(~Period, strip.position = "top") +
+  scale_x_continuous(label = percent, breaks = seq(0, 0.12, 0.03)) +
+  scale_y_continuous(label = percent) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    x = "Risk",
+    y = "Mean Return % of Decade",
+    title = "Asset Classes Comparison",
+    subtitle = "Risk-Return relation during the last three decades",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+### NPI components
+
+The NPI returns $(r_{t})$ are splitted in two components: an income yield derived from properties rental activity $(y_{t})$, and a capital or growth return $(g_{t})$ generated by changes in market values and additional capital improvements to properties (Geltner, Miller, Clayton, & Eichholtz, 2014), i.e.
+
+$$r_{t}=y_{r}+g_{t}.$$
+
+The calculation of each component is a combination of time-weighted and dollar-weighted types of returns, while they measure changes between one quarter and the prior one, they are adjusted for income earned during the quarter.
+
+Financial data is aggreagated for the whole set of properties reported by members for the calculation of the NPI, or those that belong to certain subset for sub-indices calculation. For instance, for the calculation of the Midwest Retail subindex, only those properties of that region and property type are considered in the calculation, as follows...
+
+---
+### NPI formula
+
+$$y_{t}=\frac{\sum_{i=1}^{n}NOI_{i,t}}{\sum_{i=1}^{n}BMV_{i,t}-\frac{1}{2}\sum_{i=1}^{n}\left(PS_{i,t}-CI_{i,t}\right)-\frac{1}{3}\sum_{i=1}^{n}NOI_{i,t}};$$
+
+
+$$g_{t}=\frac{\sum_{i=1}^{n}EMV_{i,t}-\sum_{i=1}^{n}BMV_{i,t}+\sum_{i=1}^{n}\left(PS_{i,t}-CI_{i,t}\right)}{\sum_{i=1}^{n}BMV_{i,t}-\frac{1}{2}\sum_{i=1}^{n}\left(PS_{i,t}-CI_{i,t}\right)-\frac{1}{3}\sum_{i=1}^{n}NOI_{i,t}}.$$
+Here,
+
+- $EMV$: Porperty $i$ End Market Value at time $t$,
+- $BMV$: Porperty $i$ Begin Market Value at time $t$,
+- $NOI$: Porperty $i$ Net Operating Income at time $t$,
+- $CI$; Porperty $i$ Capital Improvements at time $t$,
+- $PS$; Porperty $i$ Partial Sales at time $t$.
+
+---
+class: inverse center middle
+
+# 2. Real Estate Derivatives
+
+---
+## Options, futures and other derivatives
+
+A derivative is a contingent claim that derives its value from another asset, called the underlying. 
+
+Derivatives are written under many types of underlying assets: stocks, interest rates, commodities, exchange rates or even the weather. One interesting case is when derivatives are written on real estate; specifically, on real estate indices, like the NPI or the IPD. 
+
+There are multiple types of derivatives, but the most common ones are futures/forwards, options and swaps. On this presentation we will focus on a very common type of option: the European Put Option.
+
+The European put option gives its holder the right to sell an asset at a previously contracted price (usually called the strike) at the expiration time of the option. Therefore, the holder will benefit of decreases on prices. This option is ideal to hedge long position in the underlying asset.
+
+The payoff for a European put option at maturity, with strike price $K$ and spot price $S$, is given by
+
+$$U=(K-S)^{+}=max(K-S,0).$$
+
+---
+### Put options payoff
+
+Consider a put option with strike price of 40 monetary units. We can sketch the payoff at maturity:  
+
+```{r Put options payoff, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 3.5, fig.width = 8}
+# Plain vanilla options payoff
+dvt_call <- function(s, k) max(s - k, 0)
+dvt_put <- function(s, k) max(k - s, 0)
+
+# Plot
+tibble(
+  S = seq(0, 80, 0.1),
+  Spot = S - 40,
+) %>% 
+  mutate(`Put Option` = map_dbl(S, function(x) dvt_put(x, 40) - 0.81)) %>% 
+  pivot_longer(cols = c("Spot", "Put Option"), names_to = "Asset", values_to = "Payoff") %>%
+  mutate(
+    Asset = factor(Asset, levels = c("Spot", "Put Option")),
+    col = map_chr(Payoff, function(c) ifelse(c > 0, "green", "red")),
+    col = factor(col, levels = c("red", "green"))
+  ) %>%
+  ggplot(mapping = aes(x = S, y = Payoff, color = col)) +
+  geom_line(size = 1) +
+  facet_wrap(~Asset, ncol = 2, strip.position = "top") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    x = "Spot Price at Maturity",
+    y = "Strategy payoff",
+    title = "European Put Option Payoff",
+    subtitle = "Comparison between buying the spot to holding a put option",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+## Pricing methodologies
+
+There is no consensus on how to price real estate derivatives (Fabozzi, Shiller, & Tunaru, 2020). There are basically two schools of thought:
+
+#### Equilibrium pricing
+
+Base the derivative value on the expeceted total return premium per unit of risk, and the supply and demand for the asset. If there is a premium on the risk prime, the demand will be higher, rising the price while the premia decreases until equilibrium is found. If the risk prime is too low, supply will be higher, dropping the price while the premia increases until equilibrium is found. These models are criticized because the connection between known future prices and options is not clear (Tunaru, 2017). 
+
+#### No arbitrage pricing
+
+Creates a portfolio on the underlying market to replicate the price path of the derivative. By the no arbitrage principle, the derivatives and the replicating portfolio must be the same. The problem of this approach when pricing real estate derivatives, is that short-selling real estate is not a real possibility. However, many models are based on real estate indices whom might by "shortable". Moreover, selecting the right stochastic process for the underlying is also an open question (Fabozzi, Shiller & Tunaru, 2011). 
+
+---
+### The multi-step generalized model
+
+The most common no-arbitrage models for pricing derivatives are (Merton, 1973) and (Cox, Ross, & Rubinstein, 1979) models.
+
+Let's start by introducing a generalized version of Cox, Ross and Rubinstein model, developed by (Capinski & Kopp, 2012).
+
+Given a payoff function $h(S_{n})$, the value of the option is given by the value $V$ of the replicating portfolio $(x,y)$, given by
+
+$$V_{(x,y)}(0)=\tilde{V}_{(x,y)}(n)-\tilde{G}_{(x)}(n),$$
+
+where $G$ is the discounted gains process
+
+$$\tilde{G}_{x}(n)=\sum_{i=1}^{n}\langle x(i), \Delta \tilde{S}(i)\rangle.$$
+
+This model assumes a flat risk-free rate curve with no dividends, and the possibility of short-selling the underlying asset.
+
+---
+### The Black-Scholes-Merton model
+
+```{r bsm valuation}
+# BSM valuation
+dvt_bsm <- function(S, K, rf, Mat, sigma, Exc) {
+  
+  if (Mat > 0) { #BSM formula
+    d1 <- (log(S / K) + (rf + 0.5 * sigma ^ 2) * Mat) / (sigma * sqrt(Mat))
+    d2 <- d1 - sigma * sqrt(Mat)
+    if (Exc == "Call") {
+      price <- S * pnorm(d1) - K * exp(-rf * Mat) * pnorm(d2)
+    } else {  # Put
+      price <- K * exp(-rf * Mat) * pnorm(-d2) - S * pnorm(-d1)
+    }
+    
+    return(price)
+    
+  } else { # Intrinsic value
+    if (Exc == "Call") {
+      dvt_call(S, K)
+    } else {
+      dvt_put(S, K)
+    }
+  }
+  
+} 
+```
+
+---
+## Basis risk
+
+Hedging strategies are usually imperfect due to three main reasons
+
+1. The asset (or portfolio) hedged is not the same as the underlying asset used for hedging.
+2. There is uncertainity about the date in which the underlying asset will be actaully traded.
+3. The hedging strategy may require that the derivatives expires before the underlying asset actual trade.
+
+These problems lead to what is know as basis risk, defined as
+
+$$\text{basis risk}_{t} = S_{t} - F_{t}.$$
+
+*How many contracts of the derivative should be written to hedge a given position on the underlying asset?*
+
+According to (Hull, 2012), the optimal number of contracts depends directly on the minimum variance hedge ratio $(h)$, which is the slope on the linear regression given by $\Delta S \sim \Delta F$.
+
+**Therefore, a hedging strategy is succesfull as long as the minimum variance hedge ratio is statistically significant. Otherwise, the optimal number number of contracts is 0.**
+
+---
+class: inverse center middle
+
+# 3. Hedging Real Estate Portfolios
+
+---
+## Can the NPI hedge active strategies?
+
+Derivatives for commercial real estate have been written based on nation-wide indices, like the IPD in the United Kingdom or the NPI in the United States. However, private or public investment trusts do not usually have a portfolio big enough to be succesfully hedged by a nation-wide index. In fact, in the [single-housing derivatives market traded at CME](https://www.cmegroup.com/trading/real-estate.html) underlying indices are at the city level.
+
+**We want to find empirical evidence that the NPI is not an appropriate underlying asset for hedging common real estate portfolios, and propose basket options based on NPI sub-indices as a becoming alternative.**
+
+**Although current pricing models have limitations to price real estate basket options, these are overcome with a new pricing methodology.**
+
+In the rest of the presentation we:
+
+- Demonstrate that using NPI as underlying does not hedge real estate portfolios correctly. 
+- Summmarize the stylized facts of NPI sub-indices that a pricing models should replicate.
+- **Propose** a methodology to price sub-indices basket options.
+
+```{r pivot ncreif dataset, message=FALSE, warning=FALSE, include=FALSE}
+ncf_datasetp <- ncf_dataset %>% 
+  pivot_longer(cols = c("y", "g", "r"), names_to = "Index", values_to = "Return") %>% 
+  mutate(Index = factor(Index, levels = c("y", "g", "r"))) 
+```
+
+---
+### Data Description
+
+Data set used correspond of NCREIF returns, financial components and indices since inception: 
+
+- All returns are displayed on a quarterly basis courtesy of NCREIF.
+- Data gathered nation-wide, by property type and by region. Intial analysis does not consider region level data.
+- Since hospitality starts 18 quarters late (1983), all data from 1978 to 1982 is cut off to have same sample size.
+- No explicit data gaps (NA's or NULLs) in the dataset.
+
+Otherwise specified, the following convention will be used:
+
+1. Indices returns
+  - *r*: total return
+  - *y*: income return
+  - *g*: capital return
+2. Property types
+  - *A*: Apartments
+  - *H*: Hospitality
+  - *I*: Industrial
+  - *O*: Office
+  - *R*: Retail
+  
+---
+### NPI descriptive statistics
+
+*Let's start analyzing the relation between income, capital and total returns*.
+
+```{r Descriptive Statistics, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_dataset %>% 
+  mutate(PropertyType = fct_recode(PropertyType, "NPI" = "All")) %>% 
+  group_by(PropertyType) %>% 
+  skimr::skim() %>% 
+  filter(skim_variable %in% c("y", "g", "r")) %>% 
+  select(
+    Return = skim_variable,
+    `Property type` = PropertyType,
+    Mean = numeric.mean,
+    `Standard Deviation` = numeric.sd,
+    p00 = numeric.p0,
+    p25 = numeric.p25,
+    p50 = numeric.p50,
+    p75 = numeric.p75,
+    p100 = numeric.p100
+  ) %>% 
+  mutate(
+    across(c("Mean", "Standard Deviation", "p00", "p25", "p50", "p75", "p100"), 
+    function(x) {
+      x <- str_c(round(x * 100, 2), "%")
+      bad <- str_detect(x, pattern = "\\.\\d%")
+      x[bad] <- str_c(str_remove(x[bad], pattern = "%"), "0%")
+      bad <- str_detect(x, pattern = "^-?\\d%$")
+      x[bad] <- str_c(str_remove(x[bad], pattern = "%"), ".00%")
+      return(x)
+    })
+  ) %>% 
+  DT::datatable(
+    fillContainer = FALSE, 
+    options = list(pageLength = 6)
+  )
+```
+
+---
+
+```{r Return Shape, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_datasetp %>% 
+  transmute(
+    Date = Date,
+    PropertyType = fct_recode(PropertyType,
+                              "NPI" = "All",
+                              "Apartments" = "A",
+                              "Hospitality" = "H",
+                              "Industrial" = "I",
+                              "Office" = "O",
+                              "Retail" = "R"
+    ),
+    `Index Returns` = fct_recode(Index,
+                                 "Income" = "y",
+                                 "Capital" = "g",
+                                 "Total" = "r"
+    ),
+    Return = Return
+  ) %>% 
+  ggplot(mapping = aes(x = Return, fill = `Index Returns`)) +
+  geom_density(mapping = aes(y = ..density..), alpha = 0.5) +
+  facet_wrap(~PropertyType, ncol = 2, strip.position = "top") +
+  scale_x_continuous(labels = percent) +
+  labs(
+    x = "Mean Return",
+    y = "Density",
+    title = "Real Estate Returns Shape",
+    subtitle = "ggplot2 density estimate",
+    caption = "@NicolasCuestaQ"
+  ) +
+  scale_fill_brewer(palette = "Blues") +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+
+```{r Return Boxplot, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_datasetp  %>% 
+  mutate(
+    PropertyType = factor(
+      PropertyType, 
+      levels = c("All", "A", "H", "I", "O", "R")
+    )
+  ) %>%
+  transmute(
+    Date = Date,
+    `Property Type` = fct_recode(PropertyType,
+                                "NPI" = "All",
+                                "Apartments" = "A",
+                                "Hospitality" = "H",
+                                "Industrial" = "I",
+                                "Office" = "O",
+                                "Retail" = "R"
+    ),
+    `Index Returns` = fct_recode(Index,
+                                 "Income" = "y",
+                                 "Capital" = "g",
+                                 "Total" = "r"
+    ),
+    Return = Return
+  ) %>%  
+  ggplot(mapping = aes(x = `Index Returns`, y = Return, color = `Property Type`)) +
+  geom_boxplot() +
+  facet_wrap(~`Property Type`, nrow = 1, strip.position = "top") +
+  scale_y_continuous(labels = percent) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    x = NULL,
+    y = "Historical Returns",
+    title = "Historical Returns Distribution Analysis",
+    subtitle = "Quarterly returns by property type boxplots",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),
+    legend.position = "right",
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+
+```{r Total Return Decomposition, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_dataset  %>% 
+  filter(PropertyType == "All") %>% 
+  select(
+    Total = r, 
+    Capital = g,
+    Income = y
+  ) %>% 
+  GGally::ggpairs() +
+  scale_x_continuous(labels = percent) +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+
+### Preliminar Findings I
+
+From previous exploratory analysis, we conclude that:
+
+- For each of the primary real estate asset classes, excluding Hospitality, the sample positive income returns exclusively.
+- For Hospitality, negative income returns are observed with higher standard deviation.
+- There is clearly no winner or loser. All property types seems to have similar mean.
+- Hospitality has clearly more outliers.
+- Income returns are less volatile than capital returns.
+- Income returns shift positively capital returns to get the total return.
+- Income appear to be leptokurtic.
+
+**In conclusion, capital returns can be hedge by the index, but the income needs additional financial engineering**
+
+*Now we want to know how well would property types be hedged by the total index. Therefore, we compare nation-wide capital returns versus property level capital returns*.
+
+---
+```{r Decomposition by Property Type, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+ncf_dataset %>% 
+  select(Date, PropertyType, g) %>% 
+  pivot_wider(names_from = PropertyType, values_from = g) %>% 
+  select(-c("Date")) %>% 
+  drop_na() %>% 
+  GGally::ggpairs() +
+  scale_x_continuous(labels = percent) +
+  theme_bw() +
+  theme(
+    axis.text.x=element_text(angle = 90, vjust = 0.5),
+    strip.background = element_blank(),
+    strip.placement = "outside"
+  )
+```
+
+---
+```{r Portfolios correlation, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8, cache=TRUE}
+# Grid of all possible portfolios (No short-sales only real estates)
+port_grid <- expand.grid(
+  wA = seq(0, 1, 0.05),
+  wI = seq(0, 1, 0.05),
+  wO = seq(0, 1, 0.05),
+  wR = seq(0, 1, 0.05),
+  wH = seq(0, 1, 0.05)
+) %>% 
+  mutate(Filter = wA + wI + wO + wR + wH) %>%
+  filter(Filter == 1) %>% 
+  select(wA:wH) %>% 
+  mutate(key = row_number()) %>% 
+  as_tibble()
+
+port_model <- function(wA, wI, wO, wR, wH) {
+
+  # Modified NCREIF dataset
+  df <- ncf_dataset %>% 
+    select(Date, PropertyType, g) %>% 
+    pivot_wider(names_from = PropertyType, values_from = g) %>% 
+    drop_na()
+  
+  # Calculation portfolio-wise
+  n <- length(wA)
+  v <- vector("list", n)
+  for (k in 1:n) {
+    v[[k]] <- df %>%
+      mutate(Portfolios = A * wA[k] + I * wI[k] + O * wO[k] + R * wR[k] + H * wH[k]) %>% 
+      select(Date, NPI = All, Portfolios) %>% 
+      mutate(Index = 100 * cumprod(1+ Portfolios),
+             Delta = c(Index[1] - 100, diff(Index)))
+  }
+  
+  # Results
+  return(v)
+}
+
+# Generate returns for each portfolio
+port_returns <- port_grid %>% 
+  select(key, wA:wH) %>% 
+  mutate(Portfolio = port_model(wA, wI, wO, wR, wH))
+
+port_returns %>% 
+  transmute(
+    key = key,
+    A = wA,
+    I = wI,
+    O = wO,
+    R = wR,
+    H = wH,
+    Portfolio = Portfolio
+  ) %>% 
+  mutate(rho = unlist(map(Portfolio, function(x) cor(x$NPI, x$Portfolios)))) %>% 
+  select(
+    Apartments = A, 
+    Industrial = I, 
+    Office = O, 
+    Retail = R, 
+    Hospitality = H, 
+    Correlation = rho
+  ) %>% 
+  GGally::ggparcoord(columns = 1:5, groupColumn = 6, scale = "globalminmax", showPoints = TRUE) +
+  scale_y_continuous(labels = percent) +
+  labs(
+    x = "Property Type",
+    y = "Weight in Portoflio",
+    title = "Portfolios Correlation with the NPI",
+    subtitle = "Parallel lines plot based on quarterly returns",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw()
+```
+
+---
+### Preliminar Findings II
+
+From previous experiment, we can say that:
+
+- Office has a huge weight on the index, so correlation mught be spurious
+- Apartments and Industrial properties have relatively low participation and their correlation is relatively high.
+- Hospitality might not be well represented by the index.
+- The greater the weight on Hospitality, the less correlated to the NPI.
+
+**In conclusion, property type capital returns are highly correlated with the NPI capital returns, so short selling the latter is a good candidate for hedging strategies. However, this is not conclusive and statistical tests are required.**
+
+---
+## Empirical evidence of basis risk
+
+The experiment was performed in three steps:
+
+**1)** Property type sub-indices portfolio were built using non-negative weights with steps of 5%, i.e. discrete combinations of $w_{I}$ for $I\in\{A,H,I,O,R\}$ such that
+
+$$\sum_{i\in I}w_{i}=1.$$
+
+This lead to a total of 9,113 different portfolios. Then, using the returns of these portfolios, the dollar QoQ change on the NPI during the life of the derivitive was calculated.
+
+**2)** Using the NPI index, an $EWMA(\lambda=0.94)$ model for its volatility and the 3 Months T-Bills as risk-free rate; three years European put options with expiration dates ranging from 03/31/1993 and 03/31/2020 were price, leading to 129 different options and their price path. 
+
+**3)** For each derivative, the quality of the hedge (existence of basis risk) was assessed on each period for each portfolio, using a *t-*test to evaluate the statistical significance of the coefficient $\beta_{1}$ in equation
+
+$$\Delta C_{t} = \beta_{0}+\beta_{1}\Delta S_{t}+\epsilon_{t}.$$
+
+In total, $(129\times 9,113)$ coefficients were estimated.
+
+---
+
+```{r Results Summary, echo=FALSE, message=FALSE, warning=FALSE, fig.height = 4.5, fig.width = 8}
+test <- map_dfr(
+  dir("../../basis_risk_put"),
+  function (d) {
+    read_csv(str_c("../../basis_risk_put/", d)) %>%
+      mutate(Date = as.Date(d))
+  }
+)
+
+# Function that calculates EWMA volatility given a returns vector
+spot_ewma <- function(x, lambda = 0.94) {
+  n <- length(x)
+  v <- vector("double", n)
+  v[1] <- var(x)
+  for (i in 2:n) {
+    v[i] <- lambda * v[i - 1] + (1 - lambda) * (x[i - 1] ^ 2)
+  }
+  return(sqrt(v))
+}
+
+# Market data set for pricing options
+high_vol <- ncf_dataset %>%
+  filter(PropertyType == "All") %>%
+  select(Date, r) %>%
+  mutate(NPI = cumprod(1 + r) * 100) %>%
+  mutate(vol = spot_ewma(r)) %>%
+  mutate(`High Volatility (>=P75)` = factor(vol >= quantile(vol)[[4]], levels = c(TRUE, FALSE))) %>%
+  select(Date, vol, `High Volatility (>=P75)`)
+
+test %>%
+  filter(p.value > 0.05) %>%
+  select(key, Date, p.value) %>%
+  group_by(Date) %>%
+  summarise(Count = n_distinct(key) / 9113) %>%
+  left_join(high_vol, by = c("Date")) %>%
+  mutate(Date = Date %m+% months(-9)) %>% # To display x-axis correctly
+  ggplot() +
+  geom_histogram(
+    mapping = aes(x = Date, y = Count, fill = `High Volatility (>=P75)`),
+    stat = "identity",
+    color = "grey"
+  ) +
+  geom_rect(
+    mapping = aes(xmin = Peak, xmax = Trough, ymin = -Inf, ymax = +Inf),
+    data = recessions[3:5, ],
+    fill = "#FF0000",
+    alpha = 0.10
+  ) +
+  scale_x_date(
+    breaks = date_breaks("2 years"),
+    limits = as.Date(c("1988-03-31", "2020-03-31")),
+    labels = date_format("%Q4-%Y")
+  ) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(
+    x = "Expiration date",
+    y = "Percentage of Portfolios Poorly Hedged",
+    title = "Real Estate Portfolios Hedge Quality",
+    subtitle = "European 3 years puts on the NPI",
+    caption = "@NicolasCuestaQ"
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+---
+### Preliminar Findings III
+
+Clearly the NPI does not always provide a good hedge on put options. Important things to considers:
+
+- Bad hedging is not related to high volatility in markets.
+- Bad hedging is not related to economic crisis either.
+- What happen in a period when the hedge is perfect is an open question.
+
+This is an initial experiment that needs to consdider movements in other variables.
+
+1. Only put options were used. Other types of derivatives on the NPI must be considered.
+2. All puts where written ATM. It is impotant to analyze what would happen when options are written ITM or OTM.
+3. A constant maturity of three years were used. What would happen with 5 years derivatives?
+4. The BSM model does not look appropriate for options on real estate. Will changing the pricing model change the results?
+
+---
+## What's next?
+
+Real estate basket options seems like the correct alternative to plain vanilla options on the NPI. However, a pricing methodology that fits to real estate particularities needs to be developed. 
+
+Currently there are multiple methodologies for pricing real estate derivatives as (Tunaru, 2017) summarized. However, there is no consensus on the right approach for this effort (Fabozzi, Shiller, & Tunaru, 2020).
+
+The generalized tree model is a good candidate for pricing NPI sub-indices basket options. However, the model lacks of some important features that are instrinsic to the commercial real estate market:
+
+1. Income returns are discretely flowing to the property, following NCREIF index calculation methodology.
+2. Flat risk-free asset curve is not a good assumption, since these derivatives are mean to be written for 3 years or more.
+3. There is not such a thing as an NPI short-sale.
+
+**Financial engineering can help us removing the first and the second constraints, but the third one will rely on exchanges.**
+
+---
+class: inverse center middle
+
+# Bibliography
+
+---
+
+[1] 	R. J. Shiller and K. E. Case, "The Efficiency of the Market for Single-Family Homes," The American Economic Review, vol. 2, no. 1, pp. 125-137, 1989. 
+
+[2] 	D. M. Geltner, N. G. Miller, J. Clayton and P. Eichholtz, Commercial Real Estate, Analysis & Investments, 2 ed., vol. 1, Manson, OH: OnCourse Learning, 2014. 
+
+[3] 	F. J. Fabozzi, R. J. Shiller and R. S. Tunaru, "A 30-Year Perspective on Property Derivatives: What Can Be Done to Tame Property Price Risk?," Journal of Economic Perspectives, vol. 34, no. 4, pp. 121-145, 2020. 
+
+[4] 	R. S. Tunaru, Real-Estate Derivatives: From Econometrics to Financial Engineering, 1 ed., vol. 1, Oxford: Oxford University Press, 2017. 
+
+[5] 	F. J. Fabozzi, R. J. Shiller and R. S. Tunaru, "A Pricing Framework for Real Estate Derivatives," European Financial Management, vol. 00, no. 0, pp. 1-28, 2011. 
+
+[6] 	R. C. Merton, "Theory of Rational Option Pricing," The Bell Journal of Economics and Management Science, vol. 4, no. 1, pp. 141-183, 1973. 
+
+[7] 	J. C. Cox, S. A. Ross and M. Rubinstein, "Option Pricing: A Simplified Approach," Journal of Financial Economics, vol. 7, no. 3, pp. 229-263, 1979. 
+
+[8] 	M. Capinski and E. Kopp, Discrete Models of Financial Markets, 1 ed., vol. 1, New York: Cambridge University Press, 2012. 
+
+[9] 	J. C. Hull, Options, Futures and Other Derivatives, 8 ed., vol. 1, Boston: Prentice Hall, 2012. 
+
+
+
+
+
